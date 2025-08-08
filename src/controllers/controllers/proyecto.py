@@ -16,6 +16,7 @@ class ReactiveFollowGap(Node):
         # Topics
         lidarscan_topic = '/scan'
         drive_topic = '/drive'
+        odom_topic = '/ego_racecar/odom'
 
         # Parámetros del algoritmo
         self.base_speed = 4.8
@@ -44,7 +45,7 @@ class ReactiveFollowGap(Node):
         # Publishers & Subscribers
         self.drive_pub = self.create_publisher(AckermannDriveStamped, drive_topic, 10)
         self.scan_sub = self.create_subscription(LaserScan, lidarscan_topic, self.lidar_callback, 10)
-        self.odom_sub = self.create_subscription(Odometry, '/ego_racecar/odom', self.odom_callback, 10)
+        self.odom_sub = self.create_subscription(Odometry, odom_topic, self.odom_callback, 10)
 
         self.get_logger().info("ReactiveFollowGap node initialized.")
 
@@ -193,7 +194,7 @@ class ReactiveFollowGap(Node):
         x = msg.pose.pose.position.x
         y = msg.pose.pose.position.y
 
-        # Zona de inicio (ajustable)
+        # Zona de inicio
         in_start_zone = (abs(x) < 2.0 and abs(y) < 2.0)
 
         # Solo cuenta vuelta si:
