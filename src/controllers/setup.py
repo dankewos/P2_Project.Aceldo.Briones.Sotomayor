@@ -30,6 +30,7 @@ setup(
             'temporizador = controllers.temporizador:main',
             'proyectoRob = controllers.proyectoRob:main',
             'proyectoObstaculos = controllers.proyectoObstaculos:main',
+            'proyectoObstaculosWF = controllers.proyectoObstaculosWF:main',
         ],
     },
 )
