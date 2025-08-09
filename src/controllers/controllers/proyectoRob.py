@@ -1,172 +1,147 @@
-import math
-import numpy as np
 import rclpy
 from rclpy.node import Node
-from rclpy.qos import QoSProfile, QoSReliabilityPolicy, QoSHistoryPolicy
-
+import numpy as np
+import math
 from sensor_msgs.msg import LaserScan
-from nav_msgs.msg import Odometry
 from ackermann_msgs.msg import AckermannDriveStamped
 from std_msgs.msg import String
+from nav_msgs.msg import Odometry
 
-
-class GapFollowerRace(Node):
+class FollowGapCarrera(Node):
     def __init__(self):
-        super().__init__('gap_follower_race')
+        super().__init__('follow_gap_carrera_node')
+        
+        self.VELOCIDAD_MAXIMA = 8.2
+        self.VELOCIDAD_MINIMA = 3.5
+        self.FACTOR_REDUCCION_CURVA = 1.2 
+        self.DISTANCIA_MAX_LIDAR = 3.5
+        self.RADIO_BURBUJA = 0.25
+        self.ANGULO_MAX_DIRECCION = np.radians(20)
+        self.PUNTO_LEJANO_BIAS = 0.8
+        self.SUAVIZADO_DIRECCION = 0.9 
+        self.ultimo_angulo_direccion = 0.0
 
-        # -------- parámetros configurables --------
-        self.declare_parameter('v_max', 8.2)
-        self.declare_parameter('v_min', 3.5)
-        self.declare_parameter('curve_exponent', 1.2)
-        self.declare_parameter('lidar_cap', 3.5)
-        self.declare_parameter('bubble_radius_m', 0.25)
-        self.declare_parameter('max_steer_deg', 20.0)
-        self.declare_parameter('far_bias', 0.8)
-        self.declare_parameter('steer_smooth', 0.9)
+        self.FINISH_LINE_X = 0.00
+        self.FINISH_LINE_Y = 0.00
+        self.FINISH_LINE_Y_RANGE = 5.0
+        self.MIN_DISTANCE_TO_ARM = 0.2
 
-        self.declare_parameter('finish_x', 0.0)
-        self.declare_parameter('finish_y', 0.0)
-        self.declare_parameter('finish_y_band', 5.0)
-        self.declare_parameter('rearm_dist', 0.2)
+        self.last_pose = None
+        self.can_count_lap = True
+        self.race_started = True
 
-        # -------- cache de parámetros --------
-        self.v_max = float(self.get_parameter('v_max').value)
-        self.v_min = float(self.get_parameter('v_min').value)
-        self.curve_exp = float(self.get_parameter('curve_exponent').value)
-        self.lidar_cap = float(self.get_parameter('lidar_cap').value)
-        self.bubble_r = float(self.get_parameter('bubble_radius_m').value)
-        self.max_steer = math.radians(float(self.get_parameter('max_steer_deg').value))
-        self.far_bias = float(self.get_parameter('far_bias').value)
-        self.steer_alpha = float(self.get_parameter('steer_smooth').value)
+        self.lap_publisher = self.create_publisher(String, '/lap_trigger', 10)
+        self.odom_sub = self.create_subscription(Odometry, '/ego_racecar/odom', self.odom_callback, 10)
+        msg_out = String()
+        msg_out.data = "Nueva vuelta"
+        self.lap_publisher.publish(msg_out)
 
-        self.finish_x = float(self.get_parameter('finish_x').value)
-        self.finish_y = float(self.get_parameter('finish_y').value)
-        self.finish_band = float(self.get_parameter('finish_y_band').value)
-        self.rearm_dist = float(self.get_parameter('rearm_dist').value)
+        lidarscan_topic = '/scan'
+        drive_topic = '/drive'
+        self.drive_pub = self.create_publisher(AckermannDriveStamped, drive_topic, 10)
+        self.scan_sub = self.create_subscription(LaserScan, lidarscan_topic, self.lidar_callback, 10)
+        
 
-        # -------- estado --------
-        self._last_pose = None
-        self._arm_for_lap = True
-        self._last_steer = 0.0
+    def odom_callback(self, msg: Odometry):
+        current_pose = msg.pose.pose
 
-        # -------- pubs/subs --------
-        qos_sensor = QoSProfile(
-            reliability=QoSReliabilityPolicy.BEST_EFFORT,
-            history=QoSHistoryPolicy.KEEP_LAST,
-            depth=5,
-        )
-        self.drive_pub = self.create_publisher(AckermannDriveStamped, '/drive', 5)
-        self.lap_pub = self.create_publisher(String, '/lap_trigger', 10)
-        self.scan_sub = self.create_subscription(LaserScan, '/scan', self.on_scan, qos_sensor)
-        self.odom_sub = self.create_subscription(Odometry, '/ego_racecar/odom', self.on_odom, 10)
-
-    # -------------------- ODOM --------------------
-    def on_odom(self, msg: Odometry):
-        pose = msg.pose.pose
-
-        if self._last_pose is None:
-            self._last_pose = pose
+        if self.last_pose is None:
+            self.last_pose = current_pose
             return
 
-        last_x = self._last_pose.position.x
-        x = pose.position.x
-        y = pose.position.y
+        last_x = self.last_pose.position.x
+        current_x = current_pose.position.x
+        current_y = current_pose.position.y
 
-        crossed = (last_x < self.finish_x) and (x >= self.finish_x)
-        on_straight = abs(y - self.finish_y) < self.finish_band
+        crossed_finish_line = (last_x < self.FINISH_LINE_X and current_x >= self.FINISH_LINE_X)
+        on_finish_straight = abs(current_y - self.FINISH_LINE_Y) < self.FINISH_LINE_Y_RANGE
+        
+        if crossed_finish_line and on_finish_straight and self.can_count_lap:
+            msg_out = String()
+            msg_out.data = "Nueva vuelta"
+            self.lap_publisher.publish(msg_out)
 
-        if crossed and on_straight and self._arm_for_lap:
-            self.lap_pub.publish(String(data='Nueva vuelta'))
-            self._arm_for_lap = False
+            self.can_count_lap = False
 
-        if not self._arm_for_lap:
-            # rearmar cuando nos alejamos suficiente
-            if abs(x - self.finish_x) > self.rearm_dist:
-                self._arm_for_lap = True
+        if not self.can_count_lap:
+            dist_from_finish = math.sqrt((current_pose.position.x - self.FINISH_LINE_X)**2)
+            if dist_from_finish > self.MIN_DISTANCE_TO_ARM:
+                self.can_count_lap = True
 
-        self._last_pose = pose
+        self.last_pose = current_pose
 
-    # -------------------- LIDAR --------------------
-    def on_scan(self, scan: LaserScan):
-        ranges = np.asarray(scan.ranges, dtype=np.float32)
-        # limpiar valores no válidos y limitar rango
-        ranges[~np.isfinite(ranges)] = self.lidar_cap
-        np.clip(ranges, 0.0, self.lidar_cap, out=ranges)
 
-        # 1) burbuja alrededor del obstáculo más cercano
-        closest_idx = int(np.argmin(ranges))
-        closest_dist = float(ranges[closest_idx])
-        if closest_dist > 0.1:
-            span = 2.0 * math.atan2(self.bubble_r, closest_dist)
-            rad_idx = max(1, int(span / scan.angle_increment))
+    def lidar_callback(self, msg):
+        ranges = np.array(msg.ranges, dtype=np.float32)
+        ranges[np.isinf(ranges) | np.isnan(ranges)] = self.DISTANCIA_MAX_LIDAR
+        ranges = np.clip(ranges, 0.0, self.DISTANCIA_MAX_LIDAR)
+        
+        idx_closest = np.argmin(ranges)
+        dist_closest = ranges[idx_closest]
+        
+        if dist_closest > 0.1:
+            angle_span = 2 * np.arctan2(self.RADIO_BURBUJA, dist_closest)
+            bubble_radius_idx = int(angle_span / msg.angle_increment)
         else:
-            rad_idx = 30  # fallback seguro
+            bubble_radius_idx = 30
+        start_idx = max(0, idx_closest - bubble_radius_idx)
+        end_idx = min(len(ranges) - 1, idx_closest + bubble_radius_idx)
+        ranges[start_idx : end_idx + 1] = 0.0
 
-        a = max(0, closest_idx - rad_idx)
-        b = min(len(ranges) - 1, closest_idx + rad_idx)
-        ranges[a:b + 1] = 0.0
-
-        # 2) mayor gap de valores > 0
-        best_len = 0
-        best_a = 0
-        cur_len = 0
-        cur_a = 0
-        for i, r in enumerate(ranges):
-            if r > 0.1:
-                if cur_len == 0:
-                    cur_a = i
-                cur_len += 1
+        max_len = 0
+        best_start_idx = 0
+        best_end_idx = 0
+        current_len = 0
+        current_start_idx = 0
+        for i in range(len(ranges)):
+            if ranges[i] > 0.1:
+                if current_len == 0:
+                    current_start_idx = i
+                current_len += 1
             else:
-                if cur_len > best_len:
-                    best_len = cur_len
-                    best_a = cur_a
-                cur_len = 0
-        if cur_len > best_len:
-            best_len = cur_len
-            best_a = cur_a
-        best_b = best_a + best_len - 1
-
-        drive = AckermannDriveStamped()
-
-        if best_len > 0:
-            gap = ranges[best_a:best_b + 1]
-            far_rel = int(np.argmax(gap))
-            far_abs = best_a + far_rel
-            gap_center = (best_a + best_b) // 2
-
-            target_idx = int(self.far_bias * far_abs + (1.0 - self.far_bias) * gap_center)
-            target_ang = scan.angle_min + target_idx * scan.angle_increment
-
-            # suavizado de dirección
-            steer = self.steer_alpha * self._last_steer + (1.0 - self.steer_alpha) * target_ang
-            steer = float(np.clip(steer, -self.max_steer, self.max_steer))
-            self._last_steer = steer
-
-            # reducción de velocidad según curvatura
-            curve = min(abs(target_ang) / self.max_steer, 1.0)
-            scale = (1.0 - curve) ** self.curve_exp
-            speed = self.v_min + (self.v_max - self.v_min) * scale
-
-            drive.drive.steering_angle = steer
-            drive.drive.speed = float(speed)
+                if current_len > max_len:
+                    max_len = current_len
+                    best_start_idx = current_start_idx
+                    best_end_idx = i - 1
+                current_len = 0
+        if current_len > max_len:
+            max_len = current_len
+            best_start_idx = current_start_idx
+            best_end_idx = len(ranges) - 1
+            
+        drive_msg = AckermannDriveStamped()
+        
+        if max_len > 0:
+            gap_ranges = ranges[best_start_idx : best_end_idx + 1]
+            idx_punto_lejano_relativo = np.argmax(gap_ranges)
+            idx_punto_lejano_absoluto = best_start_idx + idx_punto_lejano_relativo
+            idx_centro_gap = (best_start_idx + best_end_idx) // 2
+            target_idx = int(self.PUNTO_LEJANO_BIAS * idx_punto_lejano_absoluto + (1 - self.PUNTO_LEJANO_BIAS) * idx_centro_gap)
+            target_angle = msg.angle_min + target_idx * msg.angle_increment
+            
+            steering_angle = self.SUAVIZADO_DIRECCION * self.ultimo_angulo_direccion + (1 - self.SUAVIZADO_DIRECCION) * target_angle
+            self.ultimo_angulo_direccion = steering_angle
+            steering_angle = np.clip(steering_angle, -self.ANGULO_MAX_DIRECCION, self.ANGULO_MAX_DIRECCION)
+            
+            severidad_curva = abs(target_angle) / self.ANGULO_MAX_DIRECCION
+            
+            severidad_curva = np.clip(severidad_curva, 0.0, 1.0)
+            
+            factor_reduccion = (1.0 - severidad_curva) ** self.FACTOR_REDUCCION_CURVA
+            speed = self.VELOCIDAD_MINIMA + (self.VELOCIDAD_MAXIMA - self.VELOCIDAD_MINIMA) * factor_reduccion
+            
+            drive_msg.drive.steering_angle = float(steering_angle)
+            drive_msg.drive.speed = float(speed)
         else:
-            # sin gap: detenerse
-            self._last_steer = 0.0
-            drive.drive.steering_angle = 0.0
-            drive.drive.speed = 0.0
-
-        self.drive_pub.publish(drive)
-
+            drive_msg.drive.steering_angle = 0.0
+            drive_msg.drive.speed = 0.0
+            self.ultimo_angulo_direccion = 0.0
+        
+        self.drive_pub.publish(drive_msg)
 
 def main(args=None):
     rclpy.init(args=args)
-    node = GapFollowerRace()
-    try:
-        rclpy.spin(node)
-    finally:
-        node.destroy_node()
-        rclpy.shutdown()
-
-
-if __name__ == '__main__':
-    main()
+    node = FollowGapCarrera()
+    rclpy.spin(node)
+    node.destroy_node()
+    rclpy.shutdown()
