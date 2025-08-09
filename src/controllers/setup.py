@@ -27,6 +27,8 @@ setup(
             'rrt_node = controllers.rrt_node:main',
             'mpc_node = controllers.mpc_node:main',
             'followgap = controllers.proyecto:main',
+            'temporizador = controllers.temporizador:main',
+            'proyectoRob = controllers.proyectoRob:main',
         ],
     },
 )
