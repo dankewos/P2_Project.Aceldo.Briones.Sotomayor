@@ -26,7 +26,7 @@ setup(
             'purepursuit_node = controllers.purepursuit_node:main',
             'rrt_node = controllers.rrt_node:main',
             'mpc_node = controllers.mpc_node:main',
-            'followgap = controllers.proyectoFTG:main',
+            'proyectoFTG = controllers.proyectoFTG:main',
             'temporizador = controllers.temporizador:main',
             'proyectoRob = controllers.proyectoRob:main',
             'proyectoObstaculos = controllers.proyectoObstaculos:main',
