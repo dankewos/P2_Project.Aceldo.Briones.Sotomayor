@@ -26,11 +26,11 @@ setup(
             'purepursuit_node = controllers.purepursuit_node:main',
             'rrt_node = controllers.rrt_node:main',
             'mpc_node = controllers.mpc_node:main',
-            'followgap = controllers.proyecto:main',
+            'followgap = controllers.proyectoFTG:main',
             'temporizador = controllers.temporizador:main',
             'proyectoRob = controllers.proyectoRob:main',
             'proyectoObstaculos = controllers.proyectoObstaculos:main',
-            'proyectoObstaculosWF = controllers.proyectoObstaculosWF:main',
+            'proyectoWF = controllers.proyectoWF:main',
         ],
     },
 )
