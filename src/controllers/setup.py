@@ -29,6 +29,7 @@ setup(
             'followgap = controllers.proyecto:main',
             'temporizador = controllers.temporizador:main',
             'proyectoRob = controllers.proyectoRob:main',
+            'proyectoObstaculos = controllers.proyectoObstaculos:main',
         ],
     },
 )
