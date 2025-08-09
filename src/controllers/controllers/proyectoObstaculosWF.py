@@ -38,6 +38,7 @@ class WallFollowingNode(Node):
         self.wall_side = "right"  # Por defecto seguir pared derecha
         self.switch_wall_counter = 0
         self.last_wall_switch = time.time()
+        self.scan_count = 0  # Contador de scans
         
         # Detección de obstáculos frontales
         self.front_obstacle_threshold = 1.0
@@ -203,6 +204,7 @@ class WallFollowingNode(Node):
 
     def lidar_callback(self, data):
         """Callback principal de wall following"""
+        self.scan_count += 1  # Incrementar contador
         ranges = self.preprocess_lidar(data.ranges)
         
         # Verificar si hay obstáculo frontal
