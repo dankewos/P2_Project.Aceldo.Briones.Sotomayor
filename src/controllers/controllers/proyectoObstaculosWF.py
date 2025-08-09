@@ -1,283 +1,196 @@
 #!/usr/bin/env python3
-
+import math
+import time
+import numpy as np
 import rclpy
 from rclpy.node import Node
-import numpy as np
-import time
 from sensor_msgs.msg import LaserScan
 from ackermann_msgs.msg import AckermannDriveStamped
 from nav_msgs.msg import Odometry
 
-class WallFollowingNode(Node):
+
+class PID:
+    def __init__(self, kp, ki, kd, out_min=-float('inf'), out_max=float('inf')):
+        self.kp, self.ki, self.kd = kp, ki, kd
+        self.out_min, self.out_max = out_min, out_max
+        self.e_prev = 0.0
+        self.i_term = 0.0
+        self.t_prev = None
+
+    def reset(self):
+        self.e_prev = 0.0
+        self.i_term = 0.0
+        self.t_prev = None
+
+    def update(self, e, t_now):
+        if self.t_prev is None:
+            dt = 0.0
+        else:
+            dt = max(1e-3, t_now - self.t_prev)
+        self.t_prev = t_now
+
+        self.i_term += e * dt
+        d = (e - self.e_prev) / dt if dt > 0 else 0.0
+        self.e_prev = e
+
+        u = self.kp * e + self.ki * self.i_term + self.kd * d
+        return float(np.clip(u, self.out_min, self.out_max))
+
+
+class WallFollower(Node):
     def __init__(self):
         super().__init__('wall_following_node')
 
-        # Topics
-        lidarscan_topic = '/scan'
-        drive_topic = '/drive'
-        odom_topic = '/ego_racecar/odom'
+        # --------- parámetros ----------
+        # lado a seguir: 'left' o 'right'
+        self.declare_parameter('side', 'right')
+        self.side = self.get_parameter('side').get_parameter_value().string_value or 'right'
 
-        # Parámetros de wall following
-        self.desired_distance = 0.8  # Distancia deseada a la pared (80cm)
-        self.lookahead_distance = 1.5  # Distancia de lookahead
-        self.max_speed = 5.0
-        self.min_speed = 1.0
-        self.base_speed = 3.0
-        self.max_steering_angle = np.radians(30)
-        
-        # Parámetros del controlador PID
-        self.kp = 1.5  # Proporcional
-        self.ki = 0.1  # Integral  
-        self.kd = 0.8  # Derivativo
-        
-        # Variables del PID
-        self.prev_error = 0.0
-        self.integral = 0.0
-        
-        # Variables de estado - TODAS INICIALIZADAS
-        self.wall_side = "right"  # Por defecto seguir pared derecha
-        self.switch_wall_counter = 0
-        self.last_wall_switch = time.time()
-        self.scan_count = 0  # VARIABLE FALTANTE AGREGADA
-        
-        # Detección de obstáculos frontales
-        self.front_obstacle_threshold = 1.0
-        
-        # Control de vueltas
+        self.declare_parameter('desired_dist', 0.8)      # distancia objetivo al muro [m]
+        self.declare_parameter('theta_deg', 50.0)        # ángulo base para mediciones
+        self.declare_parameter('alpha_deg', 10.0)        # separación angular entre rayos
+        self.declare_parameter('lookahead', 0.7)         # proyección hacia adelante [m]
+
+        self.declare_parameter('max_steer_deg', 30.0)
+        self.declare_parameter('v_min', 1.2)
+        self.declare_parameter('v_base', 5.0)
+        self.declare_parameter('v_max', 10.0)
+
+        self.desired_dist = float(self.get_parameter('desired_dist').value)
+        self.th_deg = float(self.get_parameter('theta_deg').value)
+        self.al_deg = float(self.get_parameter('alpha_deg').value)
+        self.L = float(self.get_parameter('lookahead').value)
+
+        self.max_steer = math.radians(float(self.get_parameter('max_steer_deg').value))
+        self.v_min = float(self.get_parameter('v_min').value)
+        self.v_base = float(self.get_parameter('v_base').value)
+        self.v_max = float(self.get_parameter('v_max').value)
+
+        # filtros
+        self.steer_alpha = 0.85
+        self.speed_alpha = 0.7
+        self.steer_filt = 0.0
+        self.speed_filt = self.v_base
+
+        # PID de dirección (error de distancia lateral proyectada)
+        self.pid = PID(kp=1.2, ki=0.0, kd=0.10,
+                       out_min=-self.max_steer, out_max=self.max_steer)
+
+        # vuelta (igual que tu lógica)
         self.lap_start_time = time.time()
         self.lap_count = 0
         self.prev_in_start_zone = False
         self.lap_times = []
-        self.has_left_start_zone = False 
+        self.has_left_start_zone = False
 
-        # Publishers & Subscribers
-        self.drive_pub = self.create_publisher(AckermannDriveStamped, drive_topic, 10)
-        self.scan_sub = self.create_subscription(LaserScan, lidarscan_topic, self.lidar_callback, 10)
-        self.odom_sub = self.create_subscription(Odometry, odom_topic, self.odom_callback, 10)
+        # pubs/subs
+        self.drive_pub = self.create_publisher(AckermannDriveStamped, '/drive', 10)
+        self.scan_sub = self.create_subscription(LaserScan, '/scan', self.on_scan, 10)
+        self.odom_sub = self.create_subscription(Odometry, '/ego_racecar/odom', self.on_odom, 10)
 
-        self.get_logger().info("Wall Following Node initialized - Right wall following")
+        self.scan_meta = None  # (angle_min, angle_inc, n)
+        self.max_lidar_range = 9.0
+        self.get_logger().info(f"WallFollowing: siguiendo muro {self.side}")
 
-    def preprocess_lidar(self, ranges):
-        """Preprocesamiento del LiDAR"""
-        proc = np.array(ranges, dtype=np.float32)
-        
-        # Reemplazar valores inválidos
-        invalid_mask = (proc == 0) | np.isinf(proc) | np.isnan(proc)
-        proc[invalid_mask] = 10.0
-        proc = np.clip(proc, 0.1, 10.0)
-        
-        return proc
+    # -------- utilidades LiDAR --------
+    def _preprocess(self, ranges):
+        arr = np.asarray(ranges, dtype=np.float32)
+        arr[~np.isfinite(arr) | (arr <= 0.0)] = self.max_lidar_range
+        return np.clip(arr, 0.05, self.max_lidar_range)
 
-    def get_wall_distance(self, ranges):
-        """Obtiene la distancia a la pared que estamos siguiendo"""
-        num_ranges = len(ranges)
-        angle_increment = 2 * np.pi / num_ranges
-        
-        if self.wall_side == "right":
-            # Ángulos para pared derecha (270° ± 30°)
-            right_angle_idx = int((3 * np.pi / 2) / angle_increment) % num_ranges
-            range_span = int(np.radians(60) / angle_increment)
-        else:
-            # Ángulos para pared izquierda (90° ± 30°)
-            right_angle_idx = int((np.pi / 2) / angle_increment) % num_ranges
-            range_span = int(np.radians(60) / angle_increment)
-        
-        start_idx = max(0, right_angle_idx - range_span // 2)
-        end_idx = min(num_ranges, right_angle_idx + range_span // 2)
-        
-        # Tomar la distancia mínima en ese rango (más conservador)
-        wall_distances = ranges[start_idx:end_idx]
-        return np.min(wall_distances)
+    def _idx(self, ang, amin, ainc, n):
+        j = int(round((ang - amin) / ainc))
+        return max(0, min(n - 1, j))
 
-    def get_lookahead_distance(self, ranges):
-        """Obtiene la distancia de lookahead"""
-        num_ranges = len(ranges)
-        angle_increment = 2 * np.pi / num_ranges
-        
-        if self.wall_side == "right":
-            # Lookahead a 45° hacia la derecha
-            lookahead_angle = 3 * np.pi / 4  # 135°
-        else:
-            # Lookahead a 45° hacia la izquierda  
-            lookahead_angle = np.pi / 4  # 45°
-            
-        lookahead_idx = int(lookahead_angle / angle_increment) % num_ranges
-        return ranges[lookahead_idx]
+    def _range_at(self, scan, angle_rad, win=2):
+        """Promedia una pequeña ventana alrededor de angle_rad."""
+        n = len(scan.ranges)
+        i = self._idx(angle_rad, scan.angle_min, scan.angle_increment, n)
+        a = max(0, i - win)
+        b = min(n, i + win + 1)
+        val = np.array(scan.ranges[a:b], dtype=np.float32)
+        val[~np.isfinite(val) | (val <= 0.0)] = self.max_lidar_range
+        return float(np.median(np.clip(val, 0.05, self.max_lidar_range)))
 
-    def detect_front_obstacle(self, ranges):
-        """Detecta obstáculos frontales"""
-        center_idx = len(ranges) // 2
-        front_range = int(np.radians(30) / (2 * np.pi / len(ranges)))
-        
-        front_distances = ranges[max(0, center_idx - front_range):
-                               min(len(ranges), center_idx + front_range)]
-        
-        min_front = np.min(front_distances)
-        return min_front < self.front_obstacle_threshold
+    # -------- callback LiDAR --------
+    def on_scan(self, scan: LaserScan):
+        t = self.get_clock().now().nanoseconds * 1e-9
 
-    def should_switch_wall(self, ranges):
-        """Determina si debe cambiar de pared a seguir"""
-        current_time = time.time()
-        
-        # No cambiar muy frecuentemente
-        if current_time - self.last_wall_switch < 2.0:
-            return False
-            
-        center_idx = len(ranges) // 2
-        left_space = np.mean(ranges[:center_idx])
-        right_space = np.mean(ranges[center_idx:])
-        
-        # Cambiar si la pared actual está muy cerca y la otra tiene más espacio
-        current_wall_dist = self.get_wall_distance(ranges)
-        
-        if self.wall_side == "right":
-            other_wall_space = left_space
-        else:
-            other_wall_space = right_space
-            
-        # Cambiar si la pared actual está muy cerca Y la otra tiene mucho más espacio
-        should_switch = (current_wall_dist < 0.4 and other_wall_space > current_wall_dist * 2.0)
-        
-        return should_switch
+        # elegir signos según lado
+        sign = -1.0 if self.side.lower().startswith('right') else +1.0
+        theta = math.radians(self.th_deg) * sign
+        theta_a = math.radians(self.th_deg + self.al_deg) * sign
 
-    def calculate_wall_following_steering(self, wall_distance, lookahead_distance):
-        """Controlador PID para wall following"""
-        # Error: diferencia entre distancia deseada y actual
-        error = self.desired_distance - wall_distance
-        
-        # Componente proporcional
-        proportional = self.kp * error
-        
-        # Componente integral
-        self.integral += error
-        self.integral = np.clip(self.integral, -1.0, 1.0)  # Anti-windup
-        integral_term = self.ki * self.integral
-        
-        # Componente derivativo
-        derivative = self.kd * (error - self.prev_error)
-        self.prev_error = error
-        
-        # Control PID total
-        pid_output = proportional + integral_term + derivative
-        
-        # Ajuste por lookahead (anticipación)
-        lookahead_error = self.desired_distance - lookahead_distance
-        lookahead_adjustment = lookahead_error * 0.3
-        
-        # Combinar PID con lookahead
-        steering_output = pid_output + lookahead_adjustment
-        
-        # Invertir si seguimos pared izquierda
-        if self.wall_side == "left":
-            steering_output = -steering_output
-            
-        return np.clip(steering_output, -self.max_steering_angle, self.max_steering_angle)
+        # tomas a dos ángulos (método clásico de wall-following)
+        b = self._range_at(scan, theta_a)     # más "atrás"
+        a = self._range_at(scan, theta)       # más "adelante"
 
-    def calculate_speed(self, ranges, steering_angle):
-        """Velocidad adaptativa para wall following"""
-        center_idx = len(ranges) // 2
-        front_range = int(np.radians(45) / (2 * np.pi / len(ranges)))
-        
-        front_distances = ranges[max(0, center_idx - front_range):
-                               min(len(ranges), center_idx + front_range)]
-        
-        min_front = np.min(front_distances)
-        avg_front = np.mean(front_distances)
-        
-        # Factor base de velocidad
-        if min_front < 0.5:
-            speed_factor = 0.2
-        elif min_front < 1.0:
-            speed_factor = 0.4
-        elif min_front < 2.0:
-            speed_factor = 0.7
-        elif avg_front > 3.0:
-            speed_factor = 1.2
-        else:
-            speed_factor = 1.0
-        
-        # Penalización por ángulo de dirección
-        angle_factor = 1.0 - (abs(steering_angle) / self.max_steering_angle) * 0.4
-        
-        target_speed = self.base_speed * speed_factor * angle_factor
-        return np.clip(target_speed, self.min_speed, self.max_speed)
+        # estimar ángulo del muro y distancia actual
+        # ref: alpha = atan((a*cos(phi) - b) / (a*sin(phi)))
+        phi = math.radians(self.al_deg)
+        alpha = math.atan2((a * math.cos(phi) - b), (a * math.sin(phi)))
+        dist_now = b * math.cos(alpha)
 
-    def lidar_callback(self, data):
-        """Callback principal de wall following"""
-        self.scan_count += 1  # INCREMENTAR CONTADOR AQUÍ
-        ranges = self.preprocess_lidar(data.ranges)
-        
-        # Verificar si hay obstáculo frontal
-        front_obstacle = self.detect_front_obstacle(ranges)
-        
-        # Verificar si debe cambiar de pared
-        if self.should_switch_wall(ranges):
-            self.wall_side = "left" if self.wall_side == "right" else "right"
-            self.last_wall_switch = time.time()
-            self.integral = 0.0  # Reset del integral
-            self.get_logger().info(f"Switching to {self.wall_side.upper()} wall following")
-        
-        # Obtener distancias de la pared
-        wall_distance = self.get_wall_distance(ranges)
-        lookahead_distance = self.get_lookahead_distance(ranges)
-        
-        # Preparar mensaje
-        drive_msg = AckermannDriveStamped()
-        drive_msg.header.stamp = self.get_clock().now().to_msg()
-        drive_msg.header.frame_id = "base_link"
-        
-        if front_obstacle:
-            # Obstáculo frontal - girar hacia el lado con más espacio
-            center_idx = len(ranges) // 2
-            left_space = np.mean(ranges[:center_idx])
-            right_space = np.mean(ranges[center_idx:])
-            
-            if left_space > right_space:
-                steering_angle = np.radians(25)
-                self.wall_side = "right"  # Después del giro, seguir pared derecha
-            else:
-                steering_angle = np.radians(-25)
-                self.wall_side = "left"   # Después del giro, seguir pared izquierda
-                
-            speed = 1.5
-            self.get_logger().info(f"Front obstacle! Turning {'LEFT' if left_space > right_space else 'RIGHT'}")
-            
-        else:
-            # Wall following normal
-            steering_angle = self.calculate_wall_following_steering(wall_distance, lookahead_distance)
-            speed = self.calculate_speed(ranges, steering_angle)
-        
-        drive_msg.drive.speed = float(speed)
-        drive_msg.drive.steering_angle = float(steering_angle)
-        self.drive_pub.publish(drive_msg)
-        
-        # Debug info
-        if self.scan_count % 20 == 0:  # Cada 2 segundos aprox
-            self.get_logger().info(f"Wall: {self.wall_side} | Dist: {wall_distance:.2f}m | Speed: {speed:.1f}")
+        # distancia proyectada a lookahead L
+        dist_proj = dist_now + self.L * math.sin(alpha)
 
-    def odom_callback(self, msg):
-        """Callback de odometría simplificado"""
+        # error: queremos que dist_proj == desired_dist
+        e = self.desired_dist - dist_proj
+        steer_cmd = self.pid.update(e, t)
+
+        # suavizar y limitar
+        steer_cmd = self.steer_alpha * self.steer_filt + (1.0 - self.steer_alpha) * steer_cmd
+        steer_cmd = float(np.clip(steer_cmd, -self.max_steer, self.max_steer))
+        self.steer_filt = steer_cmd
+
+        # velocidad según giro y espacio frontal
+        d_front = self._range_at(scan, 0.0, win=4)
+        ang_factor = 1.0 - 0.6 * (abs(steer_cmd) / self.max_steer)
+        free_factor = np.interp(d_front, [0.8, 3.0, 6.0], [0.3, 1.0, 1.2])
+        v_target = np.clip(self.v_base * ang_factor * free_factor, self.v_min, self.v_max)
+        v_cmd = self.speed_alpha * self.speed_filt + (1.0 - self.speed_alpha) * v_target
+        self.speed_filt = v_cmd
+
+        # publicar
+        msg = AckermannDriveStamped()
+        msg.header.stamp = self.get_clock().now().to_msg()
+        msg.header.frame_id = 'base_link'
+        msg.drive.steering_angle = steer_cmd
+        msg.drive.speed = float(v_cmd)
+        self.drive_pub.publish(msg)
+
+    # -------- callback ODOM (vueltas) --------
+    def on_odom(self, msg: Odometry):
         x = msg.pose.pose.position.x
         y = msg.pose.pose.position.y
-
-        # Zona de inicio
         in_start_zone = (abs(x) < 2.0 and abs(y) < 2.0)
 
         if in_start_zone and not self.prev_in_start_zone and self.has_left_start_zone:
-            lap_end_time = time.time()
-            lap_duration = lap_end_time - self.lap_start_time
-            self.lap_times.append(lap_duration)
+            t1 = time.time()
+            lap = t1 - self.lap_start_time
+            self.lap_times.append(lap)
             self.lap_count += 1
-
-            self.get_logger().info(f"🏁 Vuelta {self.lap_count} completada en {lap_duration:.2f} s.")
-            
-            if self.lap_times:
-                best_time = min(self.lap_times)
-                self.get_logger().info(f"Mejor tiempo: {best_time:.2f}s")
-            
-            self.lap_start_time = lap_end_time
+            self.get_logger().info(f"🏁 Vuelta {self.lap_count} en {lap:.2f} s")
+            self.lap_start_time = t1
+            if self.lap_count == 10:
+                self.get_logger().info(f"10 vueltas. Mejor: {min(self.lap_times):.2f} s")
 
         if not in_start_zone:
             self.has_left_start_zone = True
-
         self.prev_in_start_zone = in_start_zone
+
+
+def main(args=None):
+    rclpy.init(args=args)
+    node = WallFollower()
+    try:
+        rclpy.spin(node)
+    except KeyboardInterrupt:
+        node.get_logger().info('Node stopped cleanly')
+    finally:
+        node.destroy_node()
+        rclpy.shutdown()
+
+
+if __name__ == '__main__':
+    main()
