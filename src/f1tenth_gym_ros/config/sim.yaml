@@ -51,7 +51,7 @@ bridge:
     # ego starting pose on map
     sx: 0.0
     sy: 0.0
-    stheta: 3.34539
+    stheta: 3.3754
 
     # opp starting pose on map
     sx1: 9.5
