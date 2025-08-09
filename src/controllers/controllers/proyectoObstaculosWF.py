@@ -34,11 +34,11 @@ class WallFollowingNode(Node):
         self.prev_error = 0.0
         self.integral = 0.0
         
-        # Variables de estado
+        # Variables de estado - TODAS INICIALIZADAS
         self.wall_side = "right"  # Por defecto seguir pared derecha
         self.switch_wall_counter = 0
         self.last_wall_switch = time.time()
-        self.scan_count = 0  # Contador de scans
+        self.scan_count = 0  # VARIABLE FALTANTE AGREGADA
         
         # Detección de obstáculos frontales
         self.front_obstacle_threshold = 1.0
@@ -204,7 +204,7 @@ class WallFollowingNode(Node):
 
     def lidar_callback(self, data):
         """Callback principal de wall following"""
-        self.scan_count += 1  # Incrementar contador
+        self.scan_count += 1  # INCREMENTAR CONTADOR AQUÍ
         ranges = self.preprocess_lidar(data.ranges)
         
         # Verificar si hay obstáculo frontal
@@ -281,19 +281,3 @@ class WallFollowingNode(Node):
             self.has_left_start_zone = True
 
         self.prev_in_start_zone = in_start_zone
-
-
-def main(args=None):
-    rclpy.init(args=args)
-    node = WallFollowingNode()
-    try:
-        rclpy.spin(node)
-    except KeyboardInterrupt:
-        node.get_logger().info("Node stopped cleanly")
-    finally:
-        node.destroy_node()
-        rclpy.shutdown()
-
-
-if __name__ == '__main__':
-    main()
