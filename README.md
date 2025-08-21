@@ -17,7 +17,7 @@ Before starting it's necessary that you install the simulator. You can find a tu
 Now that you already have the dependencies, and all, you can clone this actual repository in /home.
 
 ```bash
-git clone https://github.com/dankewos/ProyectoP1_F1Tenth.Aceldo.git
+git clone [https://github.com/dankewos/ProyectoP1_F1Tenth.Aceldo.git](https://github.com/dankewos/P2_Project.Aceldo.Briones.Sotomayor.git)
 ```
 
 ### 2. Access to the repository location
