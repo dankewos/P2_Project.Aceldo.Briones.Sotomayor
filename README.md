@@ -42,10 +42,14 @@ ros2 launch f1tenth_gym_ros gym_bridge_launch.py
  Then, there's going to be four different controllers that you can run depending on the algorithm. 
  
 ```bash
-ros2 run controllers proyectoFTG # This one is a simple FTG algorithm, used to explore the map without obstacles
-ros2 run controllers proyectoWF # This is a WF algorithm, used in the map without obstacles as well
-ros2 run controllers obstaculosFTG # Now this is a FTG algorithm that uses a PID controller to improve the performance of the algorithm
-ros2 run controllers obstaculosWF # THis one is a WF algorithm that also uses a PID controller, a little bit more strict than the regular algorithm
+# This one is a simple FTG algorithm, used to explore the map without obstacles
+ros2 run controllers proyectoFTG
+# This is a WF algorithm, used in the map without obstacles as well
+ros2 run controllers proyectoWF
+# Now this is a FTG algorithm that uses a PID controller to improve the performance of the algorithm
+ros2 run controllers obstaculosFTG
+# THis one is a WF algorithm that also uses a PID controller, a little bit more strict than the regular algorithm
+ros2 run controllers obstaculosWF 
 ```
 
 ### 5. Change the map (Optional)
