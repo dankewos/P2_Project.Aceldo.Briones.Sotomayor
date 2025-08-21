@@ -52,7 +52,7 @@ class WallFollower(Node):
         self.get_logger().info("WallFollower node initialized.")
 
     def preprocess_lidar(self, ranges):
-        """Preprocesa los datos del LiDAR: reemplaza valores inválidos y aplica un filtro."""
+        #Preprocesa los datos del LiDAR: reemplaza valores inválidos y aplica un filtro
         proc = np.array(ranges, dtype=np.float32)
         invalid_mask = (proc == 0) | np.isinf(proc) | np.isnan(proc)
         proc[invalid_mask] = self.max_lidar_range
@@ -61,7 +61,7 @@ class WallFollower(Node):
         return np.convolve(proc, kernel, mode='same')
 
     def select_cleanest_wall(self, ranges, angle_increment):
-        """Selecciona el lado con la pared más 'limpia' (menos protuberancias)."""
+        #Selecciona el lado con la pared más 'limpia' (menos protuberancias)
         num_ranges = len(ranges)
         mid_idx = num_ranges // 2
         
@@ -83,14 +83,14 @@ class WallFollower(Node):
             return 'left', left_ranges
 
     def calculate_pid(self, error, last_error, integral, kp, ki, kd):
-        """Función genérica para el cálculo PID."""
+        #Calculo de PID
         integral += error
         derivative = error - last_error
         output = kp * error + ki * integral + kd * derivative
         return output, integral
 
     def get_wall_following_angle(self, side_to_follow, side_ranges):
-        """Calcula el ángulo de dirección para seguir la pared 'limpia'."""
+        #Obtiene el angulo necesario para seguir la pared con menos obstaculos detectable
         avg_dist = np.mean(side_ranges)
         error = self.wall_distance_ref - avg_dist
         
@@ -106,11 +106,11 @@ class WallFollower(Node):
         return np.clip(steering_angle, -0.5, 0.5)
 
     def calculate_speed(self, ranges, steering_angle):
-        """Ajusta la velocidad en función de la distancia frontal y el ángulo de dirección."""
+        #Ajusta la velocidad en función de la distancia frontal y el ángulo de dirección
         # Reducir la velocidad en curvas cerradas
         speed = self.max_speed - abs(steering_angle) * 1.5
         
-        # Usar PID para ajustar la velocidad según la distancia frontal
+        # Usa PID para ajustar la velocidad según la distancia frontal
         front_range = int(np.radians(20) / (2 * np.pi / len(ranges)))
         front_distances = ranges[len(ranges) // 2 - front_range : len(ranges) // 2 + front_range]
         min_front_distance = np.min(front_distances)
@@ -145,7 +145,6 @@ class WallFollower(Node):
         self.drive_pub.publish(drive_msg)
 
     def odom_callback(self, msg):
-        """Mantiene la lógica para contar las vueltas."""
         x = msg.pose.pose.position.x
         y = msg.pose.pose.position.y
 
@@ -158,11 +157,7 @@ class WallFollower(Node):
             self.lap_count += 1
             self.get_logger().info(f"🏁 Vuelta {self.lap_count} completada en {lap_duration:.2f} s.")
             self.lap_start_time = lap_end_time
-
-            if self.lap_count == 10:
-                self.get_logger().info(f"Número de vueltas requerido alcanzado ({self.lap_count})")
-                shortest = min(self.lap_times)
-                self.get_logger().info(f"Tiempo de vuelta más corto: {shortest:.2f} segundos")
+            
 
         if not in_start_zone:
             self.has_left_start_zone = True

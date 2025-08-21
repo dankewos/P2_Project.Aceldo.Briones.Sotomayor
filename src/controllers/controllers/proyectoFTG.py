@@ -12,7 +12,7 @@ class ReactiveFollowGap(Node):
     def __init__(self):
         super().__init__('reactive_node')
 
-        # Topics
+        # Topics: Inicia los Publishers y Suscribers que envian informacion
         lidarscan_topic = '/scan'
         drive_topic = '/drive'
         odom_topic = '/ego_racecar/odom'
@@ -41,7 +41,7 @@ class ReactiveFollowGap(Node):
         self.lap_times = []
         self.has_left_start_zone = False 
 
-        # Publishers & Subscribers
+        # Publishers & Subscribers definidos
         self.drive_pub = self.create_publisher(AckermannDriveStamped, drive_topic, 10)
         self.scan_sub = self.create_subscription(LaserScan, lidarscan_topic, self.lidar_callback, 10)
         self.odom_sub = self.create_subscription(Odometry, odom_topic, self.odom_callback, 10)
@@ -49,6 +49,7 @@ class ReactiveFollowGap(Node):
         self.get_logger().info("ReactiveFollowGap node initialized.")
 
     def preprocess_lidar(self, ranges):
+        #Preprocesa la informacion obtenida del LIDAR y suaviza con un filtro
         proc = np.array(ranges, dtype=np.float32)
         invalid_mask = (proc == 0) | np.isinf(proc) | np.isnan(proc)
         proc[invalid_mask] = self.max_lidar_range
@@ -57,6 +58,7 @@ class ReactiveFollowGap(Node):
         return np.convolve(proc, kernel, mode='same')
 
     def create_safety_bubble(self, ranges, closest_idx):
+        #Crea la burbuja de seguridad que ayuda a evitar obstaculos dentro del rango definido
         bubble_ranges = np.copy(ranges)
         angle_increment = 2 * np.pi / len(ranges)
         bubble_radius_idx = int(self.bubble_radius_m / (ranges[closest_idx] * angle_increment))
@@ -67,6 +69,7 @@ class ReactiveFollowGap(Node):
         return bubble_ranges
 
     def find_gaps(self, ranges):
+        #Detecta los huecos o gaps que el carrito puede usar para avanzar
         free_mask = ranges >= self.min_clearance
         gaps = []
         start_idx = None
@@ -87,6 +90,7 @@ class ReactiveFollowGap(Node):
         return gaps
 
     def select_best_gap(self, gaps, ranges):
+        #Selecciona el mejor, el mas largo con espacio para cruzar
         if not gaps:
             return None
         best_gap = None
@@ -109,6 +113,7 @@ class ReactiveFollowGap(Node):
         return best_gap
 
     def get_target_point(self, start_idx, end_idx, ranges):
+        #Define un punto siguiente para que el carrito avance
         if start_idx is None or end_idx is None:
             return None
         gap_ranges = ranges[start_idx:end_idx + 1]
@@ -119,6 +124,7 @@ class ReactiveFollowGap(Node):
         return target_idx
 
     def calculate_steering_angle(self, target_idx, scan_data):
+        #Obtiene el steering angle para acercarse al punto objetivo definido
         if target_idx is None:
             return 0.0
         target_angle = scan_data.angle_min + target_idx * scan_data.angle_increment
@@ -130,6 +136,7 @@ class ReactiveFollowGap(Node):
         return np.clip(steering_angle, -self.max_steering_angle, self.max_steering_angle)
 
     def calculate_speed(self, ranges, steering_angle):
+        #Adapta la velocidad adecuada del carrito
         center_idx = len(ranges) // 2
         front_range = int(np.radians(30) / (2 * np.pi / len(ranges)))
         front_distances = ranges[max(0, center_idx - front_range):min(len(ranges), center_idx + front_range)]
@@ -153,6 +160,7 @@ class ReactiveFollowGap(Node):
         return self.speed_filter
 
     def lidar_callback(self, data):
+        #Llama la informacion del lidar
         self.scan_count += 1
         if self.scan_count < 5:
             return
@@ -190,15 +198,14 @@ class ReactiveFollowGap(Node):
         self.drive_pub.publish(drive_msg)
 
     def odom_callback(self, msg):
+        #Llama la informacion de odometria del carrito
         x = msg.pose.pose.position.x
         y = msg.pose.pose.position.y
 
         # Zona de inicio
         in_start_zone = (abs(x) < 2.0 and abs(y) < 2.0)
 
-        # Solo cuenta vuelta si:
-        # - Ya salió de la zona alguna vez
-        # - Y acaba de volver a entrar
+        #Contador de vueltas
         if in_start_zone and not self.prev_in_start_zone and self.has_left_start_zone:
             lap_end_time = time.time()
             lap_duration = lap_end_time - self.lap_start_time
@@ -208,10 +215,7 @@ class ReactiveFollowGap(Node):
             self.get_logger().info(f"🏁 Vuelta {self.lap_count} completada en {lap_duration:.2f} s.")
             self.lap_start_time = lap_end_time
 
-            if self.lap_count == 10:
-                self.get_logger().info(f"Número de vueltas requerido alcanzado ({self.lap_count})")
-                shortest = min(self.lap_times)
-                self.get_logger().info(f"Tiempo de vuelta más corto: {shortest:.2f} segundos")
+
 
         # Marcar que ya ha salido de la zona al menos una vez
         if not in_start_zone:
@@ -221,7 +225,7 @@ class ReactiveFollowGap(Node):
         self.prev_in_start_zone = in_start_zone
 
 
-
+#Define al main, que llama a la clase que realiza todo el proceso correspondiente
 def main(args=None):
     rclpy.init(args=args)
     node = ReactiveFollowGap()

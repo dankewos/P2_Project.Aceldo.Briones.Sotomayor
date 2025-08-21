@@ -8,7 +8,7 @@ from sensor_msgs.msg import LaserScan
 from ackermann_msgs.msg import AckermannDriveStamped
 from nav_msgs.msg import Odometry
 
-
+#Creacion de la clase que realizara el control pid (realmente pd)
 class PID:
     def __init__(self, kp, ki, kd, out_min=-float('inf'), out_max=float('inf')):
         self.kp, self.ki, self.kd = kp, ki, kd
@@ -36,12 +36,12 @@ class PID:
         u = self.kp * e + self.ki * self.i_term + self.kd * d
         return float(np.clip(u, self.out_min, self.out_max))
 
-
+#Clase que aplicara el algoritmo que sigue la pared
 class WallFollower(Node):
     def __init__(self):
         super().__init__('wall_following_node')
 
-        # --------- parámetros ----------
+        # parámetros
         # lado a seguir: 'left' o 'right'
         self.declare_parameter('side', 'right')
         self.side = self.get_parameter('side').get_parameter_value().string_value or 'right'
@@ -92,7 +92,7 @@ class WallFollower(Node):
         self.max_lidar_range = 9.0
         self.get_logger().info(f"WallFollowing: siguiendo muro {self.side}")
 
-    # -------- utilidades LiDAR --------
+    # Procesamiento de LIDAR
     def _preprocess(self, ranges):
         arr = np.asarray(ranges, dtype=np.float32)
         arr[~np.isfinite(arr) | (arr <= 0.0)] = self.max_lidar_range
@@ -103,7 +103,6 @@ class WallFollower(Node):
         return max(0, min(n - 1, j))
 
     def _range_at(self, scan, angle_rad, win=2):
-        """Promedia una pequeña ventana alrededor de angle_rad."""
         n = len(scan.ranges)
         i = self._idx(angle_rad, scan.angle_min, scan.angle_increment, n)
         a = max(0, i - win)
@@ -112,7 +111,7 @@ class WallFollower(Node):
         val[~np.isfinite(val) | (val <= 0.0)] = self.max_lidar_range
         return float(np.median(np.clip(val, 0.05, self.max_lidar_range)))
 
-    # -------- callback LiDAR --------
+    # Llama la informacion del LIDAR
     def on_scan(self, scan: LaserScan):
         t = self.get_clock().now().nanoseconds * 1e-9
 
@@ -159,7 +158,7 @@ class WallFollower(Node):
         msg.drive.speed = float(v_cmd)
         self.drive_pub.publish(msg)
 
-    # -------- callback ODOM (vueltas) --------
+    # Llamar la informacion de odometria del carrito
     def on_odom(self, msg: Odometry):
         x = msg.pose.pose.position.x
         y = msg.pose.pose.position.y
@@ -172,14 +171,12 @@ class WallFollower(Node):
             self.lap_count += 1
             self.get_logger().info(f"🏁 Vuelta {self.lap_count} en {lap:.2f} s")
             self.lap_start_time = t1
-            if self.lap_count == 10:
-                self.get_logger().info(f"10 vueltas. Mejor: {min(self.lap_times):.2f} s")
-
+ 
         if not in_start_zone:
             self.has_left_start_zone = True
         self.prev_in_start_zone = in_start_zone
 
-
+#Defina al main que lama a la clase/nodo del algoritmo WF
 def main(args=None):
     rclpy.init(args=args)
     node = WallFollower()
