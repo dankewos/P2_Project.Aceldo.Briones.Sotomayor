@@ -31,6 +31,8 @@ setup(
             'proyectoRob = controllers.proyectoRob:main',
             'proyectoObstaculos = controllers.proyectoObstaculos:main',
             'proyectoWF = controllers.proyectoWF:main',
+            'obstaculosWF=controllers.obstaculosWF:main',
+            'obstaculosFTG=controllers.obstaculosFTG:main',
         ],
     },
 )
