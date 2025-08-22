@@ -33,6 +33,7 @@ setup(
             'proyectoWF = controllers.proyectoWF:main',
             'obstaculosWF=controllers.obstaculosWF:main',
             'obstaculosFTG=controllers.obstaculosFTG:main',
+            'graficas=controllers.graficas:main',
         ],
     },
 )
